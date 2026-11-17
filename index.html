@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BOSS DD-3 Pro Digital Delay</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f1115;
+      color: #f3f4f6;
+      display: flex;
+      justify-content: center;
+      padding: 24px 14px;
+      margin: 0;
+    }
+    .pedal {
+      background: linear-gradient(160deg, #f8fafc 0%, #e2e8f0 100%);
+      color: #0f172a;
+      width: 100%;
+      max-width: 410px;
+      border-radius: 18px;
+      padding: 20px;
+      box-shadow: 0 20px 45px rgba(0,0,0,0.65);
+      border: 2px solid #cbd5e1;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+    h2 { margin: 0; color: #005fa8; font-size: 20px; letter-spacing: 0.5px; }
+    .led {
+      width: 12px; height: 12px; border-radius: 50%;
+      background: #ef4444; box-shadow: 0 0 10px #ef4444;
+    }
+    .led.off { background: #64748b; box-shadow: none; }
+    .box {
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      padding: 13px;
+      border-radius: 12px;
+      margin-bottom: 12px;
+    }
+    label {
+      display: flex; justify-content: space-between;
+      font-weight: 700; font-size: 12.5px; margin-bottom: 4px; color: #334155;
+    }
+    input[type="range"] { width: 100%; margin-bottom: 10px; accent-color: #005fa8; }
+    input[type="file"] { width: 100%; font-size: 13px; margin-bottom: 8px; }
+    .row { display: flex; gap: 8px; }
+    button {
+      flex: 1; padding: 10px; border: none; border-radius: 8px;
+      font-weight: 700; font-size: 13px; cursor: pointer; transition: 0.15s;
+    }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-primary { background: #005fa8; color: #fff; }
+    .btn-green { background: #059669; color: #fff; }
+    .btn-sub { background: #e2e8f0; color: #1e293b; padding: 7px 4px; font-size: 12px; }
+    .btn-sub.active { background: #005fa8; color: #fff; }
+    .tempo-display {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 10px;
+    }
+    .bpm-num { font-size: 26px; font-weight: 800; color: #005fa8; font-family: monospace; }
+    .lock-badge {
+      font-size: 11px; font-weight: 700; padding: 3px 8px;
+      border-radius: 20px; background: #dcfce7; color: #166534;
+    }
+    .btn-footswitch {
+      width: 100%; padding: 14px; background: #1e293b; color: #fff;
+      font-size: 15px; letter-spacing: 1px; border-radius: 10px; margin-top: 4px;
+    }
+    .btn-footswitch.active { background: #dc2626; }
+  </style>
+</head>
+<body>
+  <div class="pedal">
+    <div class="header">
+      <h2>BOSS DD-3 DIGITAL DELAY</h2>
+      <div class="led" id="led"></div>
+    </div>
+
+    <!-- 1. Audio Source -->
+    <div class="box">
+      <input type="file" id="audioFile" accept="audio/*">
+      <div class="row">
+        <button class="btn-primary" id="playBtn" disabled>&#9654; Play / Pause</button>
+        <button class="btn-green" id="grooveBtn">&#9835; Test Groove</button>
+      </div>
+      <audio id="player" crossorigin="anonymous"></audio>
+    </div>
+
+    <!-- 2. Studio Auto-Tempo Sync -->
+    <div class="box">
+      <div class="tempo-display">
+        <div>
+          <span class="bpm-num" id="bpmVal">120</span>
+          <span style="font-weight:700; font-size:13px;">BPM</span>
+        </div>
+        <span class="lock-badge" id="lockStatus">AUTO-SYNC READY</span>
+        <label style="margin:0; gap:5px; align-items:center; cursor:pointer;">
+          <input type="checkbox" id="autoCheck" checked> Auto
+        </label>
+      </div>
+
+      <div class="row" style="margin-bottom:8px;">
+        <button class="btn-sub" data-mult="1.0">1/4 Note</button>
+        <button class="btn-sub active" data-mult="0.75">Dotted 1/8</button>
+        <button class="btn-sub" data-mult="0.5">1/8 Note</button>
+        <button class="btn-sub" id="tapBtn" style="background:#cbd5e1;">TAP</button>
+      </div>
+    </div>
+
+    <!-- 3. DD-3 Controls -->
+    <div class="box">
+      <label>E.LEVEL (Echo Mix) <span id="lvlTxt">55%</span></label>
+      <input type="range" id="level" min="0" max="0.9" step="0.01" value="0.55">
+
+      <label>F.BACK (Repeats) <span id="fbTxt">42%</span></label>
+      <input type="range" id="feedback" min="0" max="0.85" step="0.01" value="0.42">
+
+      <label>D.TIME (Delay Time) <span id="timeTxt">375 ms</span></label>
+      <input type="range" id="time" min="20" max="800" step="1" value="375">
+    </div>
+
+    <button class="btn-footswitch active" id="bypassBtn">PEDAL: ON</button>
+  </div>
+
+  <script>
+    let ctx, inputNode, dryGain, wetGain, delayNode, fbGain;
+    let hiPass, lowPass, limiter, beatFilter, beatAnalyser;
+    let mediaSource = null, grooveTimer = null;
+
+    let effectOn = true;
+    let bpm = 120;
+    let subdivMult = 0.75; // Dotted 1/8 default
+
+    function setupAudio() {
+      if (ctx) {
+        if (ctx.state === 'suspended') ctx.resume();
+        return;
+      }
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+      inputNode = ctx.createGain();
+      dryGain = ctx.createGain();
+      wetGain = ctx.createGain();
+      delayNode = ctx.createDelay(2.0);
+      fbGain = ctx.createGain();
+
+      // Anti-crackling & DD-3 Tone Shaping Filters
+      hiPass = ctx.createBiquadFilter();
+      hiPass.type = 'highpass';
+      hiPass.frequency.value = 110;
+
+      lowPass = ctx.createBiquadFilter();
+      lowPass.type = 'lowpass';
+      lowPass.frequency.value = 5800;
+
+      // Master Limiter prevents clipping/khar-khar when feedback & dry sum together
+      limiter = ctx.createDynamicsCompressor();
+      limiter.threshold.value = -3.0;
+      limiter.knee.value = 12.0;
+      limiter.ratio.value = 12.0;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.15;
+
+      // Dedicated 150Hz Low-Pass Sidechain strictly for Kick/Beat BPM Detection
+      beatFilter = ctx.createBiquadFilter();
+      beatFilter.type = 'lowpass';
+      beatFilter.frequency.value = 150;
+      beatAnalyser = ctx.createAnalyser();
+      beatAnalyser.fftSize = 512;
+
+      // Clean Audio Routing
+      inputNode.connect(dryGain);
+      dryGain.connect(limiter);
+
+      inputNode.connect(hiPass);
+      hiPass.connect(delayNode);
+      delayNode.connect(lowPass);
+      lowPass.connect(wetGain);
+      wetGain.connect(limiter);
+
+      // Smooth Feedback Loop
+      lowPass.connect(fbGain);
+      fbGain.connect(delayNode);
+
+      // Sidechain Beat Analysis Routing
+      inputNode.connect(beatFilter);
+      beatFilter.connect(beatAnalyser);
+
+      limiter.connect(ctx.destination);
+
+      applyKnobs(true);
+      startKickBeatDetector();
+    }
+
+    function applyKnobs(instant = false) {
+      if (!ctx) return;
+      const now = ctx.currentTime;
+      const ramp = instant ? 0.005 : 0.06;
+
+      const lvl = parseFloat(document.getElementById('level').value);
+      const fb = parseFloat(document.getElementById('feedback').value);
+      const ms = parseFloat(document.getElementById('time').value);
+
+      document.getElementById('lvlTxt').textContent = Math.round(lvl * 100) + '%';
+      document.getElementById('fbTxt').textContent = Math.round(fb * 100) + '%';
+      document.getElementById('timeTxt').textContent = Math.round(ms) + ' ms';
+
+      dryGain.gain.setTargetAtTime(1.0, now, 0.02);
+      wetGain.gain.setTargetAtTime(effectOn ? lvl : 0, now, 0.02);
+      fbGain.gain.setTargetAtTime(effectOn ? fb : 0, now, 0.02);
+      delayNode.delayTime.setTargetAtTime(ms / 1000.0, now, ramp);
+    }
+
+    function syncDelayToBpm() {
+      let targetMs = (60000 / bpm) * subdivMult;
+      while (targetMs > 800) targetMs /= 2;
+      targetMs = Math.max(20, Math.round(targetMs));
+
+      document.getElementById('bpmVal').textContent = bpm;
+      document.getElementById('time').value = targetMs;
+      applyKnobs(false);
+    }
+
+    function startKickBeatDetector() {
+      const buf = new Float32Array(beatAnalyser.fftSize);
+      let avgEnergy = 0;
+      let lastKickTime = 0;
+      let intervals = [];
+
+      setInterval(() => {
+        if (!document.getElementById('autoCheck').checked) return;
+        beatAnalyser.getFloatTimeDomainData(buf);
+
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+        const rms = Math.sqrt(sum / buf.length);
+
+        const now = performance.now();
+        if (rms > 0.04 && rms > avgEnergy * 1.55 && (now - lastKickTime) > 300) {
+          if (lastKickTime > 0) {
+            const dt = now - lastKickTime;
+            if (dt >= 310 && dt <= 1000) {
+              intervals.push(dt);
+              if (intervals.length > 8) intervals.shift();
+
+              if (intervals.length >= 4) {
+                const sorted = [...intervals].sort((a, b) => a - b);
+                const medianDt = sorted[Math.floor(sorted.length / 2)];
+                let detected = 60000 / medianDt;
+                while (detected < 78) detected *= 2;
+                while (detected > 152) detected /= 2;
+
+                const rounded = Math.round(detected);
+                if (Math.abs(rounded - bpm) >= 2) {
+                  bpm = rounded;
+                  syncDelayToBpm();
+                  document.getElementById('lockStatus').textContent = `LOCKED ${bpm} BPM`;
+                }
+              }
+            }
+          }
+          lastKickTime = now;
+        }
+        avgEnergy = avgEnergy * 0.9 + rms * 0.1;
+      }, 25);
+    }
+
+    const player = document.getElementById('player');
+    document.getElementById('audioFile').addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      setupAudio();
+      stopGroove();
+      player.src = URL.createObjectURL(file);
+      if (!mediaSource) {
+        mediaSource = ctx.createMediaElementSource(player);
+        mediaSource.connect(inputNode);
+      }
+      document.getElementById('playBtn').disabled = false;
+      document.getElementById('lockStatus').textContent = 'DETECTING BEAT...';
+      player.play();
+    });
+
+    document.getElementById('playBtn').addEventListener('click', () => {
+      setupAudio();
+      player.paused ? player.play() : player.pause();
+    });
+
+    function stopGroove() {
+      if (grooveTimer) {
+        clearInterval(grooveTimer);
+        grooveTimer = null;
+        document.getElementById('grooveBtn').innerHTML = '&#9835; Test Groove';
+      }
+    }
+
+    document.getElementById('grooveBtn').addEventListener('click', () => {
+      setupAudio();
+      if (grooveTimer) { stopGroove(); return; }
+      player.pause();
+      document.getElementById('grooveBtn').innerHTML = '&#9632; Stop Groove';
+      document.getElementById('lockStatus').textContent = 'DETECTING BEAT...';
+
+      const testBpm = 115;
+      const stepMs = (60000 / testBpm) / 2;
+      const scale = [220, 261.63, 329.63, 392.0, 329.63, 293.66];
+      let step = 0;
+
+      const tick = () => {
+        const t = ctx.currentTime;
+        if (step % 2 === 0) {
+          const osc = ctx.createOscillator();
+          const g = ctx.createGain();
+          osc.frequency.setValueAtTime(120, t);
+          osc.frequency.exponentialRampToValueAtTime(45, t + 0.11);
+          g.gain.setValueAtTime(0.45, t);
+          g.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+          osc.connect(g); g.connect(inputNode);
+          osc.start(t); osc.stop(t + 0.16);
+        }
+        if (step % 4 === 0 || step % 4 === 3) {
+          const osc = ctx.createOscillator();
+          const filt = ctx.createBiquadFilter();
+          const g = ctx.createGain();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(scale[step % scale.length], t);
+          filt.type = 'lowpass';
+          filt.frequency.setValueAtTime(1800, t);
+          g.gain.setValueAtTime(0.28, t);
+          g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+          osc.connect(filt); filt.connect(g); g.connect(inputNode);
+          osc.start(t); osc.stop(t + 0.23);
+        }
+        step++;
+      };
+      tick();
+      grooveTimer = setInterval(tick, stepMs);
+    });
+
+    document.querySelectorAll('.btn-sub[data-mult]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.btn-sub[data-mult]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        subdivMult = parseFloat(btn.dataset.mult);
+        syncDelayToBpm();
+      });
+    });
+
+    let taps = [];
+    document.getElementById('tapBtn').addEventListener('click', () => {
+      setupAudio();
+      const now = performance.now();
+      taps.push(now);
+      if (taps.length > 4) taps.shift();
+      if (taps.length >= 2) {
+        const avg = (taps[taps.length - 1] - taps[0]) / (taps.length - 1);
+        if (avg > 280 && avg < 1200) {
+          bpm = Math.round(60000 / avg);
+          document.getElementById('lockStatus').textContent = `TAPPED ${bpm} BPM`;
+          syncDelayToBpm();
+        }
+      }
+    });
+
+    ['level', 'feedback', 'time'].forEach(id => {
+      document.getElementById(id).addEventListener('input', () => {
+        setupAudio();
+        if (id === 'time') {
+          document.getElementById('autoCheck').checked = false;
+          document.getElementById('lockStatus').textContent = 'MANUAL TIME';
+        }
+        applyKnobs(false);
+      });
+    });
+
+    document.getElementById('bypassBtn').addEventListener('click', function () {
+      setupAudio();
+      effectOn = !effectOn;
+      this.textContent = effectOn ? 'PEDAL: ON' : 'PEDAL: OFF';
+      this.classList.toggle('active', effectOn);
+      document.getElementById('led').classList.toggle('off', !effectOn);
+      applyKnobs(false);
+    });
+  </script>
+</body>
+</html>
